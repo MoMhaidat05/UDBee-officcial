@@ -104,8 +104,9 @@ def send_msg(message, is_cached: bool):
             log_info(f"Sending chunk to {target_ip}:{target_port}")
             sock.sendto(chunk, (target_ip, target_port))
             transmitted_messages += 1
-            jitter_delay = delay + random.uniform(-jitter, jitter)
-            jitter_delay = max(0, jitter_delay)
+            # Minimum 10ms delay to prevent UDP buffer overflow on receiver
+            jitter_delay = max(0.01, delay) + random.uniform(-jitter, jitter)
+            jitter_delay = max(0.005, jitter_delay)  # Never go below 5ms
             time.sleep(jitter_delay)
             
     except Exception as e:
@@ -307,7 +308,16 @@ def listener():
                 elif full_msg == "heartbeat":
                     pass
                 else:
-                    # print_formatted_text(HTML(f"<ansigreen>{html_escape_module.escape(full_msg)}</ansigreen>"))
+                    # Use plain print for large responses to avoid HTML parsing issues
+                    if len(full_msg) > 1000:
+                        print(f"\n--- Response ({len(full_msg)} chars) ---")
+                        print(full_msg)
+                        print("--- End Response ---\n")
+                    else:
+                        try:
+                            print_formatted_text(HTML(f"<ansigreen>{html_escape_module.escape(full_msg)}</ansigreen>"))
+                        except Exception:
+                            print(full_msg)
                     COMMAND_READY.set()
                 
                 received_chunks.pop(session_id, None)
