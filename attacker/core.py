@@ -33,8 +33,8 @@ SERVER = (my_ip, my_port)
 target_ip = None 
 target_port = None 
 
-# CVC Config: 23 bytes (19 data + 4 header) -> 3 labels of 21 chars -> 5 total labels
-chunk_size = 23 
+# CVC Config: 15 bytes per chunk (11 data + 4 header) -> short labels, ~60 char domains
+chunk_size = 15 
 delay = args.delay
 received_chunk_size = args.received_chunks
 buffer_size = args.buffer
