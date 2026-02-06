@@ -3,20 +3,20 @@ import struct
 
 def fragment_message(message_bytes, chunk_size):
     """
-    Splits bytes into chunks with binary header: [SessionID][Index][Total][Data]
-    """
-    # لا تقم بتحويل message_bytes إلى str هنا أبداً!
+    Splits bytes into chunks with binary header: [Index][Total][Data]
+    Session ID is returned separately to be used as DNS Transaction ID.
     
+    Returns: (session_id, chunks_list)
+    """
     chunks = []
     
-    # Generate Session ID (2 bytes)
+    # Generate Session ID (will be used as DNS Transaction ID)
     session_id = random.randint(0, 65535)
     
-    # Calculate payload size per chunk (Chunk Size - 6 bytes header)
-    header_size = 6 
+    # Calculate payload size per chunk (Chunk Size - 4 bytes header: Index + Total)
+    header_size = 4  # 2 (Index) + 2 (Total)
     data_per_chunk = chunk_size - header_size
     
-    # حماية من القسمة على صفر
     if data_per_chunk <= 0:
         data_per_chunk = 1 
 
@@ -26,14 +26,12 @@ def fragment_message(message_bytes, chunk_size):
         start = i * data_per_chunk
         end = min(start + data_per_chunk, len(message_bytes))
         
-        # Slicing bytes returns bytes
         part = message_bytes[start:end]
         
-        # Pack Binary Header (Bytes)
-        header = struct.pack('!HHH', session_id, i, total)
+        # Pack Binary Header: Index (2 bytes) + Total (2 bytes)
+        header = struct.pack('!HH', i, total)
         
-        # Bytes + Bytes = Valid
         full_chunk = header + part
         chunks.append(full_chunk)
     
-    return chunks
+    return session_id, chunks

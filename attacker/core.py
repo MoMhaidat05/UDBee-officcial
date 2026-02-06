@@ -62,7 +62,9 @@ def send_raw(payload_bytes):
             payload_bytes = payload_bytes.encode('utf-8')
 
         chunks = dns_message(payload_bytes, chunk_size)
-        for chunk in chunks:
+        log_info(f"[SEND_RAW DEBUG] Got {len(chunks)} chunks to send")
+        for i, chunk in enumerate(chunks):
+            log_info(f"[SEND_RAW DEBUG] Sending chunk {i}")
             sock.sendto(chunk, (target_ip, target_port))
             transmitted_messages += 1
             jitter_delay = delay + random.uniform(-jitter, jitter)
@@ -94,16 +96,17 @@ def send_msg(message, is_cached: bool):
 
         # dns_message handles CVC encoding
         chunks = dns_message(payload_bytes, chunk_size)
+        log_info(f"[SEND_MSG DEBUG] Got {len(chunks)} chunks to send")
 
         sent_chunks = {}
         i = 0
         for chunk in chunks:
             if is_cached:
                 sent_chunks[i] = chunk
-            i += 1
-            log_info(f"Sending chunk to {target_ip}:{target_port}")
+            log_info(f"[SEND_MSG DEBUG] Sending chunk {i}")
             sock.sendto(chunk, (target_ip, target_port))
             transmitted_messages += 1
+            i += 1
             # Minimum 10ms delay to prevent UDP buffer overflow on receiver
             jitter_delay = max(0.01, delay) + random.uniform(-jitter, jitter)
             jitter_delay = max(0.005, jitter_delay)  # Never go below 5ms
@@ -145,7 +148,10 @@ def timeout_checker():
                              received_chunks.pop(current_session_id, None)
                              continue
 
-                        if expected_chunks and current_buffer and (len(current_buffer) > 0) and ((time.time() - last_received_time) > 1.5):
+                        # Dynamic timeout: base 3s + extra time for large transfers
+                        # Large transfers (1000+]/ chunks) need more time between packets
+                        timeout_seconds = 3.0 if (not expected_chunks or expected_chunks < 500) else 5.0
+                        if expected_chunks and current_buffer and (len(current_buffer) > 0) and ((time.time() - last_received_time) > timeout_seconds):
                             missing_packets = check_missing_packets(current_buffer, expected_chunks)
                             if missing_packets:
                                 log_info(f"<ansiyellow>Requesting {len(missing_packets)} missing packets...</ansiyellow>")
@@ -196,23 +202,26 @@ def listener():
                 dns_request = DNSRecord.parse(data)
             except: continue
 
-            # [CHANGE] Decode CVC Domain
+            # Extract Session ID from DNS Transaction ID
+            session_id = dns_request.header.id
+
+            # Decode CVC Domain
             query_name = str(dns_request.q.qname).rstrip('.')
             raw_packet_bytes = cvc_codec.decode_domain_to_bytes(query_name)
 
-            if not raw_packet_bytes or len(raw_packet_bytes) < 6:
+            if not raw_packet_bytes or len(raw_packet_bytes) < 4:
                 log_warn(f"Decode failed or too short: domain={query_name} -> {len(raw_packet_bytes) if raw_packet_bytes else 0} bytes")
-                # Debug: run decode again with debug=True to see what's happening
                 cvc_codec.decode_domain_to_bytes(query_name, debug=True)
                 continue
 
-            # Unpack Binary Header
+            # Unpack Binary Header: Index (2) + Total (2) = 4 bytes
+            # Session ID is now from DNS header, not payload
             try:
-                header_bytes = raw_packet_bytes[:6]
-                chunk_data = raw_packet_bytes[6:]
-                session_id, index, total = struct.unpack('!HHH', header_bytes)
+                header_bytes = raw_packet_bytes[:4]
+                chunk_data = raw_packet_bytes[4:]
+                index, total = struct.unpack('!HH', header_bytes)
                 # Debug: detect garbage headers
-                if total > 1000 or index >= total:
+                if total > 2000 or index >= total:
                     log_warn(f"Suspicious header: session={session_id}, index={index}, total={total}")
                     log_warn(f"Domain was: {query_name}")
                     log_warn(f"Decoded bytes: {raw_packet_bytes[:20].hex()}")

